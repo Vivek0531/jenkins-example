@@ -1,0 +1,52 @@
+name: Build and Deploy to AKS
+
+on:
+  push:
+    branches:
+      - main   # Trigger workflow on push to main branch
+
+env:
+  ACR_NAME: myacrregistry       # Replace with your ACR name (without .azurecr.io)
+  AKS_RESOURCE_GROUP: my-rg     # Replace with your Resource Group
+  AKS_CLUSTER_NAME: my-aks      # Replace with your AKS cluster name
+  IMAGE_NAME: myapp             # Replace with your app/service name
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          # Store output of: az ad sp create-for-rbac --name "gh-actions-aks" --role contributor \
+          # --scopes /subscriptions/<SUB_ID>/resourceGroups/<RG_NAME> \
+          # --sdk-auth > azure-credentials.json
+
+      - name: Azure CLI - Get AKS Credentials
+        uses: azure/aks-set-context@v4
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          resource-group: ${{ env.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Log in to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and Push Docker Image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:$IMAGE_TAG .
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:$IMAGE_TAG
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Deploy to AKS
+        run: |
+          # Replace in deployment manifest with new image tag
+          kubectl set image deployment/${{ env.IMAGE_NAME }} \
+            ${{ env.IMAGE_NAME }}=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          kubectl rollout status deployment/${{ env.IMAGE_NAME }}
